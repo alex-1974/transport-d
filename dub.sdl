@@ -3,3 +3,5 @@ description "Shared bounded byte-resource transport for workspace consumers"
 license "MIT"
 sourcePaths "source"
 targetType "library"
+
+dependency "containers-d" version="~>0.3.1"
