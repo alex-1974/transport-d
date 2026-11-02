@@ -1,0 +1,5 @@
+name "transport-d"
+description "Shared bounded byte-resource transport for workspace consumers"
+license "MIT"
+sourcePaths "source"
+targetType "library"
