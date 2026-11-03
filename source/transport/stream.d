@@ -18,16 +18,19 @@ class SourceReader : ByteReader
     private ByteSource source;
     private ulong offset;
 
-    this(ByteSource source) @safe
+    this(ByteSource source, ulong offset = 0) @safe
     {
         this.source = source;
+        this.offset = offset;
     }
+
+    @property ulong position() const @safe pure nothrow { return offset; }
 
     ReadResult read(scope ubyte[] destination) @safe
     {
         if (destination.length == 0)
             return ReadResult(ReadError.endOfSource, 0);
-        auto result = source.read(ByteRange(offset, destination.length), destination);
+        auto result = source.readSome(offset, destination);
         if (result.bytesRead > 0)
             offset += result.bytesRead;
         return result;

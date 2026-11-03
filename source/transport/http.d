@@ -45,6 +45,13 @@ class HttpSource : ByteSource
         return SourceInfo(url, "http");
     }
 
+    @property SourceInfo sourceInfo() const @safe pure nothrow
+    {
+        return SourceInfo(url, "http", response.contentLength != ulong.max,
+            response.contentLength == ulong.max ? 0 : response.contentLength,
+            true);
+    }
+
     ReadResult read(ByteRange range, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @trusted
     {
@@ -90,18 +97,31 @@ class HttpSource : ByteSource
             response = HttpResponseInfo(status.code, contentLength, contentRange, url);
             if (status.code / 100 != 2)
                 return ReadResult(ReadError.sourceFailure, 0);
-            if (responseBuffer.length != range.length)
-                return ReadResult(ReadError.rangeUnavailable, responseBuffer.length);
             size_t offset;
             foreach (segment; responseBuffer.chunks)
             {
                 destination[offset .. offset + segment.length] = segment[];
                 offset += segment.length;
             }
+            if (responseBuffer.length != range.length)
+                return ReadResult(ReadError.rangeUnavailable, responseBuffer.length);
             return ReadResult(ReadError.none, offset);
         }
         catch (Exception)
             return ReadResult(ReadError.sourceFailure, 0);
+    }
+
+    ReadResult readSome(ulong offset, scope ubyte[] destination,
+        ReadLimits limits = ReadLimits.init) @safe
+    {
+        if (!destination.length)
+            return ReadResult(ReadError.endOfSource, 0);
+        auto result = read(ByteRange(offset, destination.length), destination, limits);
+        if (result.error == ReadError.rangeUnavailable && result.bytesRead > 0)
+            return ReadResult(ReadError.none, result.bytesRead);
+        if (result.error == ReadError.rangeUnavailable && result.bytesRead == 0)
+            return ReadResult(ReadError.endOfSource, 0);
+        return result;
     }
 }
 

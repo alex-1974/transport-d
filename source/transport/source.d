@@ -12,6 +12,9 @@ struct SourceInfo
 {
     string identifier;
     string scheme;
+    bool lengthKnown;
+    ulong length;
+    bool rangeCapable;
 }
 struct ReadLimits { size_t maximumBytes = size_t.max; }
 enum ReadError { none, endOfSource, invalidRange, rangeUnavailable, destinationTooSmall, limitExceeded, sourceFailure }
@@ -24,7 +27,14 @@ struct ReadResult
 
 interface ByteSource
 {
+    @property SourceInfo sourceInfo() const @safe;
     ReadResult read(ByteRange range, scope ubyte[] destination,
+        ReadLimits limits = ReadLimits.init) @safe;
+
+    /// Reads up to destination.length bytes. A short successful read means
+    /// that the source ended at the returned byte count; the following call
+    /// at that absolute offset returns endOfSource.
+    ReadResult readSome(ulong offset, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe;
 }
 
@@ -65,6 +75,11 @@ class MemorySource : ByteSource
     {
         return SourceInfo("memory", "memory");
     }
+
+    @property SourceInfo sourceInfo() const @safe pure nothrow
+    {
+        return SourceInfo("memory", "memory", true, bytes.length, true);
+    }
     ReadResult read(ByteRange range, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
@@ -83,6 +98,21 @@ class MemorySource : ByteSource
             cast(size_t)range.offset + range.length];
         return ReadResult(ReadError.none, range.length);
     }
+
+    ReadResult readSome(ulong offset, scope ubyte[] destination,
+        ReadLimits limits = ReadLimits.init) @safe
+    {
+        if (destination.length > limits.maximumBytes)
+            return ReadResult(ReadError.limitExceeded, 0);
+        if (offset > bytes.length)
+            return ReadResult(ReadError.invalidRange, 0);
+        if (offset == bytes.length)
+            return ReadResult(ReadError.endOfSource, 0);
+        auto count = bytes.length - cast(size_t) offset;
+        if (count > destination.length) count = destination.length;
+        destination[0 .. count] = bytes[cast(size_t) offset .. cast(size_t) offset + count];
+        return ReadResult(ReadError.none, count);
+    }
 }
 
 class FileSource : ByteSource
@@ -92,6 +122,19 @@ class FileSource : ByteSource
     @property SourceInfo provenance() const @safe pure nothrow
     {
         return SourceInfo(path, "file");
+    }
+
+    @property SourceInfo sourceInfo() const @safe
+    {
+        try
+        {
+            auto file = File(path, "rb");
+            scope (exit) file.close();
+            file.seek(0, SEEK_END);
+            return SourceInfo(path, "file", true, cast(ulong) file.tell(), true);
+        }
+        catch (Exception)
+            return SourceInfo(path, "file", false, 0, true);
     }
     ReadResult read(ByteRange range, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
@@ -117,6 +160,34 @@ class FileSource : ByteSource
             if (read.length != range.length)
                 return ReadResult(ReadError.rangeUnavailable, read.length);
             return ReadResult(ReadError.none, read.length);
+        }
+        catch (Exception) return ReadResult(ReadError.sourceFailure, 0);
+    }
+
+    ReadResult readSome(ulong offset, scope ubyte[] destination,
+        ReadLimits limits = ReadLimits.init) @safe
+    {
+        if (destination.length > limits.maximumBytes)
+            return ReadResult(ReadError.limitExceeded, 0);
+        if (destination.length == 0)
+            return ReadResult(ReadError.endOfSource, 0);
+        try
+        {
+            auto file = File(path, "rb");
+            scope (exit) file.close();
+            file.seek(0, SEEK_END);
+            auto size = file.tell();
+            if (offset == cast(ulong) size)
+                return ReadResult(ReadError.endOfSource, 0);
+            if (offset > cast(ulong) size)
+                return ReadResult(ReadError.invalidRange, 0);
+            auto count = cast(size_t)(cast(ulong) size - offset);
+            if (count > destination.length) count = destination.length;
+            file.seek(cast(long) offset, SEEK_SET);
+            auto read = file.rawRead(destination[0 .. count]);
+            return read.length == count
+                ? ReadResult(ReadError.none, count)
+                : ReadResult(ReadError.rangeUnavailable, read.length);
         }
         catch (Exception) return ReadResult(ReadError.sourceFailure, 0);
     }
@@ -199,7 +270,7 @@ TransferResult copyTo(ByteSource source, ByteSink sink,
     {
         auto length = limits.maximumBytes - offset;
         if (length > buffer.length) length = buffer.length;
-        auto read = source.read(ByteRange(offset, length), buffer[]);
+        auto read = source.readSome(offset, buffer[0 .. length]);
         if (read.error == ReadError.endOfSource)
             break;
         if (!read.ok)

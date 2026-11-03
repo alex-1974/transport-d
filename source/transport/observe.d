@@ -1,7 +1,7 @@
 module transport.observe;
 
 import transport.source : ByteRange, ByteSource, ReadError, ReadLimits,
-    ReadResult;
+    ReadResult, SourceInfo;
 
 /// Read-side evidence collected without changing source semantics.
 struct ReadMetrics
@@ -24,6 +24,11 @@ class ObservedSource : ByteSource
         this.source = source;
     }
 
+    @property SourceInfo sourceInfo() const @safe
+    {
+        return source.sourceInfo;
+    }
+
     ReadResult read(ByteRange range, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
@@ -32,6 +37,19 @@ class ObservedSource : ByteSource
         if (range.length > metrics.largestRequest)
             metrics.largestRequest = range.length;
         auto result = source.read(range, destination, limits);
+        metrics.bytesRead += result.bytesRead;
+        metrics.lastError = result.error;
+        return result;
+    }
+
+    ReadResult readSome(ulong offset, scope ubyte[] destination,
+        ReadLimits limits = ReadLimits.init) @safe
+    {
+        ++metrics.requests;
+        metrics.requestedBytes += destination.length;
+        if (destination.length > metrics.largestRequest)
+            metrics.largestRequest = destination.length;
+        auto result = source.readSome(offset, destination, limits);
         metrics.bytesRead += result.bytesRead;
         metrics.lastError = result.error;
         return result;

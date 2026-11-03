@@ -19,6 +19,11 @@ It must never silently replace a failed range read with a full-resource read.
 `endOfSource` is reserved for sequential transfer termination; an invalid
 requested range remains `invalidRange`.
 
+For bounded sequential consumers, `readSome(offset, destination[], limits)`
+reads up to the destination size. A shorter successful result is the final
+available chunk; a subsequent read at its end returns `endOfSource`. Exact
+random-access reads retain the stricter `ByteRange` contract.
+
 Sinks use the same bounded, synchronous style:
 
 ```d
@@ -82,8 +87,10 @@ consumer-facing names intentionally describe data flow (`chunks`,
 The extraction history remains in `docs/CONTAINERS_D_PROPOSAL.md`.
 
 Concrete sources expose lightweight provenance through `provenance`, carrying
-an identifier and scheme. This describes the origin only; authentication
-credentials and request headers are never part of the provenance value.
+an identifier and scheme. `sourceInfo` additionally reports whether the total
+length is known and whether range reads are supported. This describes the
+origin only; authentication credentials and request headers are never part of
+the provenance value.
 
 `ObservedSource` decorates any source with request count, requested bytes,
 returned bytes, largest range and last error. It is intended for consumer
