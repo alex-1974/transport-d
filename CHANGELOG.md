@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+Breaking release: transport result values now use `error-d.Result` with
+transport-owned error domains and explicit success/failure payloads.
+
+- added generic bounded synchronous `HttpExchange` support;
+- added caller-selected HTTP methods, ordinary and sensitive headers;
+- preserved exact HTTP response status, headers and bounded response bodies;
+- separated completed HTTP responses from transport and resource-limit errors;
+- added deterministic exchange substitution for protocol tests;
+- migrated source, sink, transfer, stream and observation APIs to `error-d`;
+- retained specialized `HttpSource` and `HttpSink` convenience APIs.
+
+Release publication is pending a registry-resolvable `error-d` dependency and
+the first qualified release branch/main promotion.
+
 ## 0.1.0
 
 Initial synchronous transport release candidate.
