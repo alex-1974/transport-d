@@ -13,8 +13,8 @@ transport-owned error domains and explicit success/failure payloads.
 - migrated source, sink, transfer, stream and observation APIs to `error-d`;
 - retained specialized `HttpSource` and `HttpSink` convenience APIs.
 
-Release publication is pending a registry-resolvable `error-d` dependency and
-the first qualified release branch/main promotion.
+Release publication is pending final consumer qualification and main
+promotion.
 
 ## 0.1.0
 

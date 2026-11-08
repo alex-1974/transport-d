@@ -5,4 +5,4 @@ sourcePaths "source"
 targetType "library"
 
 dependency "containers-d" version="~>0.3.1"
-dependency "error-d" path="../../../error-d"
+dependency "error-d" version="~>0.4.1"

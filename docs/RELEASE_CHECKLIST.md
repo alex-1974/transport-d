@@ -10,7 +10,7 @@
 - [x] Executor-injected asynchronous source API is documented and tested with
   the deterministic inline executor.
 - [x] Consumer-shaped OSM/imagery range probe exists.
-- [ ] Replace the local `error-d` path dependency with a registry-resolvable release.
+- [x] Replace the local `error-d` path dependency with released `error-d` 0.4.1.
 - [ ] Run consumer qualification against the breaking result API.
 - [ ] Promote the qualified release branch to `main`.
 - [ ] Create the annotated release tag `v0.2.0`.

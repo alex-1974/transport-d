@@ -123,8 +123,7 @@ unchecked origin boundary.
 `HttpExchange` is an additive protocol layer. `HttpSource` and `HttpSink`
 remain specialized byte-resource conveniences, and consumers can substitute a
 deterministic fake by implementing the small exchange interface. The package
-uses the local `error-d` path dependency while that package is not yet in the
-DUB registry.
+depends on the released `error-d` 0.4.x line.
 
 ## Development
 
