@@ -15,7 +15,15 @@ python3 tools/http_test_server.py "$received" "$port" >"$server_log" 2>&1 &
 server_pid=$!
 sleep 0.2
 
-dmd -I=source -I=../containers-d/source \
+mapfile -t dub_import_paths < <(dub describe --data=import-paths --data-list)
+import_flags=("-I=source" "-I=../containers-d/source")
+for path in "${dub_import_paths[@]}"; do
+    import_flags+=("-I=$path")
+done
+error_d_source="$(dub describe --data=source-files --data-list | grep '/error_d.d$' | head -n 1)"
+
+dmd "${import_flags[@]}" \
+    "$error_d_source" \
     source/transport/source.d source/transport/buffer.d \
     source/transport/http.d ../containers-d/source/containers/package.d \
     ../containers-d/source/containers/segmented_buffer.d \
