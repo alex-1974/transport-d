@@ -37,8 +37,10 @@ class ObservedSource : ByteSource
         if (range.length > metrics.largestRequest)
             metrics.largestRequest = range.length;
         auto result = source.read(range, destination, limits);
-        metrics.bytesRead += result.bytesRead;
-        metrics.lastError = result.error;
+        if (result.hasValue)
+            metrics.bytesRead += result.value.bytesRead;
+        else
+            metrics.lastError = result.error.kind;
         return result;
     }
 
@@ -50,8 +52,10 @@ class ObservedSource : ByteSource
         if (destination.length > metrics.largestRequest)
             metrics.largestRequest = destination.length;
         auto result = source.readSome(offset, destination, limits);
-        metrics.bytesRead += result.bytesRead;
-        metrics.lastError = result.error;
+        if (result.hasValue)
+            metrics.bytesRead += result.value.bytesRead;
+        else
+            metrics.lastError = result.error.kind;
         return result;
     }
 

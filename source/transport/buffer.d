@@ -1,7 +1,8 @@
 module transport.buffer;
 
 import containers : ContainerSegmentedByteBuffer = SegmentedByteBuffer;
-import transport.source : ByteSink, WriteError, WriteLimits, WriteResult;
+import transport.source : ByteSink, WriteError, WriteFailure, WriteLimits,
+    WriteResult, WriteValue;
 
 /**
  * Reusable, bounded byte storage for chunked transport data.
@@ -83,12 +84,13 @@ class SegmentedByteBuffer : ByteSink
         WriteLimits limits = WriteLimits.init) @safe
     {
         if (source.length > limits.maximumBytes)
-            return WriteResult(WriteError.limitExceeded, 0);
+            return WriteResult.failure(WriteFailure(WriteError.limitExceeded, 0));
         if (source.length > maximumSize - buffer.length)
-            return WriteResult(WriteError.limitExceeded, 0);
+            return WriteResult.failure(WriteFailure(WriteError.limitExceeded, 0));
         const accepted = buffer.append(source);
-        return WriteResult(accepted == source.length
-            ? WriteError.none : WriteError.destinationFailure, accepted);
+        return accepted == source.length
+            ? WriteResult.success(WriteValue(accepted))
+            : WriteResult.failure(WriteFailure(WriteError.destinationFailure, accepted));
     }
 
     WriteResult write(scope const(ubyte)[] source,

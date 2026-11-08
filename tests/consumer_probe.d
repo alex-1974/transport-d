@@ -12,7 +12,7 @@ import transport;
 
     auto osmRead = osm.read(ByteRange(1, 3), osmWindow[]);
     auto satelliteRead = satellite.read(ByteRange(4, 3), satelliteWindow[]);
-    assert(osmRead.ok && satelliteRead.ok);
+    assert(osmRead.hasValue && satelliteRead.hasValue);
     assert(osmWindow == [2, 3, 4]);
     assert(satelliteWindow == [4, 3, 2]);
     assert(osm.report.requests == 1 && osm.report.bytesRead == 3);

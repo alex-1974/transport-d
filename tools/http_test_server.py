@@ -14,10 +14,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             start, end = header[6:].split("-", 1)
             start = int(start)
             end = int(end) if end else len(payload) - 1
+            if start >= len(payload):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(payload)}")
+                self.end_headers()
+                return
             value = payload[start:end + 1]
             status = 206
         self.send_response(status)
         self.send_header("Content-Length", str(len(value)))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{start + len(value) - 1}/{len(payload)}")
         self.end_headers()
         self.wfile.write(value)
 

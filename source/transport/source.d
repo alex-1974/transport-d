@@ -1,6 +1,7 @@
 module transport.source;
 
 import std.stdio : File, SEEK_END, SEEK_SET;
+import error_d : Result;
 
 struct ByteRange { ulong offset; size_t length; }
 @property bool valid(ByteRange range) @safe pure nothrow
@@ -18,11 +19,13 @@ struct SourceInfo
 }
 struct ReadLimits { size_t maximumBytes = size_t.max; }
 enum ReadError { none, endOfSource, invalidRange, rangeUnavailable, destinationTooSmall, limitExceeded, sourceFailure }
-struct ReadResult
+struct ReadValue { size_t bytesRead; }
+struct ReadFailure { ReadError kind; size_t bytesRead; }
+alias ReadResult = Result!(ReadValue, ReadFailure);
+private ReadResult readSuccess(size_t bytes) @safe { return ReadResult.success(ReadValue(bytes)); }
+private ReadResult readFailure(ReadError error, size_t bytes = 0) @safe
 {
-    ReadError error;
-    size_t bytesRead;
-    @property bool ok() const @safe pure nothrow @nogc { return error == ReadError.none; }
+    return ReadResult.failure(ReadFailure(error, bytes));
 }
 
 interface ByteSource
@@ -40,11 +43,13 @@ interface ByteSource
 
 struct WriteLimits { size_t maximumBytes = size_t.max; }
 enum WriteError { none, destinationFailure, limitExceeded }
-struct WriteResult
+struct WriteValue { size_t bytesWritten; }
+struct WriteFailure { WriteError kind; size_t bytesWritten; }
+alias WriteResult = Result!(WriteValue, WriteFailure);
+private WriteResult writeSuccess(size_t bytes) @safe { return WriteResult.success(WriteValue(bytes)); }
+private WriteResult writeFailure(WriteError error, size_t bytes = 0) @safe
 {
-    WriteError error;
-    size_t bytesWritten;
-    @property bool ok() const @safe pure nothrow @nogc { return error == WriteError.none; }
+    return WriteResult.failure(WriteFailure(error, bytes));
 }
 
 interface ByteSink
@@ -60,11 +65,13 @@ struct TransferLimits
 }
 
 enum TransferError { none, sourceFailure, destinationFailure, limitExceeded }
-struct TransferResult
+struct TransferValue { size_t bytesTransferred; }
+struct TransferFailure { TransferError kind; size_t bytesTransferred; }
+alias TransferResult = Result!(TransferValue, TransferFailure);
+private TransferResult transferSuccess(size_t bytes) @safe { return TransferResult.success(TransferValue(bytes)); }
+private TransferResult transferFailure(TransferError error, size_t bytes = 0) @safe
 {
-    TransferError error;
-    size_t bytesTransferred;
-    @property bool ok() const @safe pure nothrow @nogc { return error == TransferError.none; }
+    return TransferResult.failure(TransferFailure(error, bytes));
 }
 
 class MemorySource : ByteSource
@@ -84,34 +91,34 @@ class MemorySource : ByteSource
         ReadLimits limits = ReadLimits.init) @safe
     {
         if (!range.valid)
-            return ReadResult(ReadError.invalidRange, 0);
+            return readFailure(ReadError.invalidRange);
         if (range.offset == bytes.length)
-            return ReadResult(ReadError.endOfSource, 0);
+            return readFailure(ReadError.endOfSource);
         if (range.offset > bytes.length
             || range.length > bytes.length - cast(size_t)range.offset)
-            return ReadResult(ReadError.invalidRange, 0);
+            return readFailure(ReadError.invalidRange);
         if (range.length > limits.maximumBytes)
-            return ReadResult(ReadError.limitExceeded, 0);
+            return readFailure(ReadError.limitExceeded);
         if (destination.length < range.length)
-            return ReadResult(ReadError.destinationTooSmall, 0);
+            return readFailure(ReadError.destinationTooSmall);
         destination[0 .. range.length] = bytes[cast(size_t)range.offset ..
             cast(size_t)range.offset + range.length];
-        return ReadResult(ReadError.none, range.length);
+        return readSuccess(range.length);
     }
 
     ReadResult readSome(ulong offset, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
         if (destination.length > limits.maximumBytes)
-            return ReadResult(ReadError.limitExceeded, 0);
+            return readFailure(ReadError.limitExceeded);
         if (offset > bytes.length)
-            return ReadResult(ReadError.invalidRange, 0);
+            return readFailure(ReadError.invalidRange);
         if (offset == bytes.length)
-            return ReadResult(ReadError.endOfSource, 0);
+            return readFailure(ReadError.endOfSource);
         auto count = bytes.length - cast(size_t) offset;
         if (count > destination.length) count = destination.length;
         destination[0 .. count] = bytes[cast(size_t) offset .. cast(size_t) offset + count];
-        return ReadResult(ReadError.none, count);
+        return readSuccess(count);
     }
 }
 
@@ -136,14 +143,15 @@ class FileSource : ByteSource
         catch (Exception)
             return SourceInfo(path, "file", false, 0, true);
     }
+
     ReadResult read(ByteRange range, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
-        if (!range.valid) return ReadResult(ReadError.invalidRange, 0);
+        if (!range.valid) return readFailure(ReadError.invalidRange);
         if (range.length > limits.maximumBytes)
-            return ReadResult(ReadError.limitExceeded, 0);
+            return readFailure(ReadError.limitExceeded);
         if (destination.length < range.length)
-            return ReadResult(ReadError.destinationTooSmall, 0);
+            return readFailure(ReadError.destinationTooSmall);
         try
         {
             auto file = File(path, "rb");
@@ -151,26 +159,26 @@ class FileSource : ByteSource
             file.seek(0, SEEK_END);
             auto size = file.tell();
             if (range.offset == cast(ulong) size)
-                return ReadResult(ReadError.endOfSource, 0);
+                return readFailure(ReadError.endOfSource);
             if (range.offset > cast(ulong) size
                 || range.length > cast(ulong) size - range.offset)
-                return ReadResult(ReadError.invalidRange, 0);
+                return readFailure(ReadError.invalidRange);
             file.seek(cast(long) range.offset, SEEK_SET);
             auto read = file.rawRead(destination[0 .. range.length]);
             if (read.length != range.length)
-                return ReadResult(ReadError.rangeUnavailable, read.length);
-            return ReadResult(ReadError.none, read.length);
+                return readFailure(ReadError.rangeUnavailable, read.length);
+            return readSuccess(read.length);
         }
-        catch (Exception) return ReadResult(ReadError.sourceFailure, 0);
+        catch (Exception) return readFailure(ReadError.sourceFailure);
     }
 
     ReadResult readSome(ulong offset, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
         if (destination.length > limits.maximumBytes)
-            return ReadResult(ReadError.limitExceeded, 0);
+            return readFailure(ReadError.limitExceeded);
         if (destination.length == 0)
-            return ReadResult(ReadError.endOfSource, 0);
+            return readFailure(ReadError.endOfSource);
         try
         {
             auto file = File(path, "rb");
@@ -178,18 +186,18 @@ class FileSource : ByteSource
             file.seek(0, SEEK_END);
             auto size = file.tell();
             if (offset == cast(ulong) size)
-                return ReadResult(ReadError.endOfSource, 0);
+                return readFailure(ReadError.endOfSource);
             if (offset > cast(ulong) size)
-                return ReadResult(ReadError.invalidRange, 0);
+                return readFailure(ReadError.invalidRange);
             auto count = cast(size_t)(cast(ulong) size - offset);
             if (count > destination.length) count = destination.length;
             file.seek(cast(long) offset, SEEK_SET);
             auto read = file.rawRead(destination[0 .. count]);
             return read.length == count
-                ? ReadResult(ReadError.none, count)
-                : ReadResult(ReadError.rangeUnavailable, read.length);
+                ? readSuccess(count)
+                : readFailure(ReadError.rangeUnavailable, read.length);
         }
-        catch (Exception) return ReadResult(ReadError.sourceFailure, 0);
+        catch (Exception) return readFailure(ReadError.sourceFailure);
     }
 }
 
@@ -201,9 +209,9 @@ class MemorySink : ByteSink
         WriteLimits limits = WriteLimits.init) @safe
     {
         if (source.length > limits.maximumBytes)
-            return WriteResult(WriteError.limitExceeded, 0);
+            return writeFailure(WriteError.limitExceeded);
         bytes ~= source;
-        return WriteResult(WriteError.none, source.length);
+        return writeSuccess(source.length);
     }
 }
 
@@ -242,9 +250,9 @@ class FileSink : ByteSink
         WriteLimits limits = WriteLimits.init) @safe
     {
         if (closed)
-            return WriteResult(WriteError.destinationFailure, 0);
+            return writeFailure(WriteError.destinationFailure);
         if (source.length > limits.maximumBytes)
-            return WriteResult(WriteError.limitExceeded, 0);
+            return writeFailure(WriteError.limitExceeded);
         try
         {
             if (!opened)
@@ -253,9 +261,9 @@ class FileSink : ByteSink
                 opened = true;
             }
             file.rawWrite(source);
-            return WriteResult(WriteError.none, source.length);
+            return writeSuccess(source.length);
         }
-        catch (Exception) return WriteResult(WriteError.destinationFailure, 0);
+        catch (Exception) return writeFailure(WriteError.destinationFailure);
     }
 }
 
@@ -263,7 +271,7 @@ TransferResult copyTo(ByteSource source, ByteSink sink,
     TransferLimits limits = TransferLimits.init) @safe
 {
     if (limits.chunkSize == 0)
-        return TransferResult(TransferError.limitExceeded, 0);
+        return transferFailure(TransferError.limitExceeded);
     auto buffer = new ubyte[limits.chunkSize];
     size_t offset;
     while (offset < limits.maximumBytes)
@@ -271,17 +279,17 @@ TransferResult copyTo(ByteSource source, ByteSink sink,
         auto length = limits.maximumBytes - offset;
         if (length > buffer.length) length = buffer.length;
         auto read = source.readSome(offset, buffer[0 .. length]);
-        if (read.error == ReadError.endOfSource)
+        if (read.hasError && read.error.kind == ReadError.endOfSource)
             break;
-        if (!read.ok)
-            return TransferResult(read.error == ReadError.limitExceeded
+        if (!read.hasValue)
+            return transferFailure(read.error.kind == ReadError.limitExceeded
                 ? TransferError.limitExceeded : TransferError.sourceFailure, offset);
-        auto written = sink.write(buffer[0 .. read.bytesRead]);
-        if (!written.ok)
-            return TransferResult(written.error == WriteError.limitExceeded
+        auto written = sink.write(buffer[0 .. read.value.bytesRead]);
+        if (!written.hasValue)
+            return transferFailure(written.error.kind == WriteError.limitExceeded
                 ? TransferError.limitExceeded : TransferError.destinationFailure, offset);
-        offset += written.bytesWritten;
-        if (read.bytesRead < length) break;
+        offset += written.value.bytesWritten;
+        if (read.value.bytesRead < length) break;
     }
-    return TransferResult(TransferError.none, offset);
+    return transferSuccess(offset);
 }

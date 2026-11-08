@@ -50,6 +50,12 @@ The reader owns only its current offset. The underlying source remains
 range-based, so the same backend can serve both random-access consumers and
 sequential transfers.
 
+For repeated local-file reads, `FileReader(path)` keeps one file handle open for
+the lifetime of the reader session. It has the same bounded `ByteReader`
+contract, exposes its current `position`, and must be closed explicitly when
+the session ends. Separate `FileReader` instances are independent; no whole
+file is buffered.
+
 `HttpSource` provides synchronous HTTP range reads when the server honours the
 `Range` request header. It reports connection, protocol and short-response
 failures as `sourceFailure` or `rangeUnavailable`; it does not perform a
@@ -57,7 +63,10 @@ pre-flight ping.
 
 `HttpOptions` makes operation timeout, connect timeout, redirect count and
 user-agent explicit. `HttpSource.responseInfo` exposes the last response's
-status, content length and content-range metadata.
+status, response content length, validated content-range metadata and, when
+known, the total resource length. `readSome` uses HTTP 416 plus a validated
+total length to report clean EOF or an invalid offset; genuine HTTP and network
+failures remain failures.
 
 `HttpSink` and `uploadTo` provide bounded synchronous PUT uploads. Payload
 chunks are retained in independent segments and supplied to libcurl through
@@ -72,7 +81,7 @@ flattening, and retains acquired capacity across `reset()`.
 ```d
 auto received = new SegmentedByteBuffer(64 * 1024, 16 * 1024 * 1024);
 auto result = received.append(httpChunk);
-if (result.ok)
+if (result.hasValue)
 {
     foreach (chunk; received.chunks)
         uploadChunk(chunk);
@@ -99,6 +108,23 @@ probes and measurements, not as a cache or scheduler.
 The asynchronous boundary is available through `AsyncByteSource`,
 `AsyncExecutor`, `AsyncOperation` and `AsyncSourceAdapter`. The caller owns
 the executor and the destination buffer until the callback returns.
+
+For protocol clients, `transport.exchange` provides a generic synchronous
+`HttpExchange`. `HttpRequest` supports the normal HTTP method family, ordinary
+and sensitive request headers, and an optional bounded `SegmentedByteBuffer`
+request body. `HttpResponse` preserves the exact HTTP status, response headers
+and a bounded response body, including for non-2xx responses. A completed HTTP
+response is represented as `error_d.Result!(HttpResponse, HttpExchangeError)`;
+DNS/TLS/socket/timeout failures and resource-limit failures remain error values
+and are never confused with an HTTP status. Automatic redirects are rejected
+when sensitive headers are present, so credentials cannot silently cross an
+unchecked origin boundary.
+
+`HttpExchange` is an additive protocol layer. `HttpSource` and `HttpSink`
+remain specialized byte-resource conveniences, and consumers can substitute a
+deterministic fake by implementing the small exchange interface. The package
+uses the local `error-d` path dependency while that package is not yet in the
+DUB registry.
 
 ## Development
 

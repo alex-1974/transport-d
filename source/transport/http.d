@@ -2,12 +2,15 @@ module transport.http;
 
 import std.format : format;
 import std.algorithm.comparison : min;
+import std.string : split, strip;
+import std.conv : to;
 import core.time : Duration;
 import std.net.curl : HTTP;
 import transport.buffer : SegmentedByteBuffer;
 import transport.source : ByteRange, ByteSink, ByteSource, ReadError,
-    ReadLimits, ReadResult, SourceInfo, TransferError, TransferLimits,
-    TransferResult, WriteError, WriteLimits, WriteResult, copyTo, valid;
+    ReadFailure, ReadLimits, ReadResult, ReadValue, SourceInfo, TransferError,
+    TransferFailure, TransferLimits, TransferResult, TransferValue, WriteError,
+    WriteFailure, WriteLimits, WriteResult, WriteValue, copyTo, valid;
 
 struct HttpOptions
 {
@@ -23,6 +26,7 @@ struct HttpResponseInfo
     ulong contentLength;
     string contentRange;
     string effectiveUrl;
+    ulong totalLength = ulong.max;
 }
 
 /// Synchronous HTTP byte-range source.
@@ -47,8 +51,8 @@ class HttpSource : ByteSource
 
     @property SourceInfo sourceInfo() const @safe pure nothrow
     {
-        return SourceInfo(url, "http", response.contentLength != ulong.max,
-            response.contentLength == ulong.max ? 0 : response.contentLength,
+        return SourceInfo(url, "http", response.totalLength != ulong.max,
+            response.totalLength == ulong.max ? 0 : response.totalLength,
             true);
     }
 
@@ -56,11 +60,11 @@ class HttpSource : ByteSource
         ReadLimits limits = ReadLimits.init) @trusted
     {
         if (!valid(range))
-            return ReadResult(ReadError.invalidRange, 0);
+            return ReadResult.failure(ReadFailure(ReadError.invalidRange, 0));
         if (range.length > limits.maximumBytes)
-            return ReadResult(ReadError.limitExceeded, 0);
+            return ReadResult.failure(ReadFailure(ReadError.limitExceeded, 0));
         if (destination.length < range.length)
-            return ReadResult(ReadError.destinationTooSmall, 0);
+            return ReadResult.failure(ReadFailure(ReadError.destinationTooSmall, 0));
 
         try
         {
@@ -91,12 +95,18 @@ class HttpSource : ByteSource
             client.onReceive = (ubyte[] data)
             {
                 auto result = responseBuffer.write(data);
-                return result.ok ? data.length : 0;
+                return result.hasValue ? data.length : 0;
             };
             client.perform();
-            response = HttpResponseInfo(status.code, contentLength, contentRange, url);
+            auto totalLength = parseTotalLength(contentRange);
+            response = HttpResponseInfo(status.code, contentLength, contentRange, url,
+                totalLength);
             if (status.code / 100 != 2)
-                return ReadResult(ReadError.sourceFailure, 0);
+                return ReadResult.failure(ReadFailure(ReadError.sourceFailure, 0));
+            if (status.code == 206 && (!contentRange.length
+                || !validContentRange(contentRange, range.offset,
+                    responseBuffer.length, totalLength)))
+                return ReadResult.failure(ReadFailure(ReadError.rangeUnavailable, 0));
             size_t offset;
             foreach (segment; responseBuffer.chunks)
             {
@@ -104,25 +114,58 @@ class HttpSource : ByteSource
                 offset += segment.length;
             }
             if (responseBuffer.length != range.length)
-                return ReadResult(ReadError.rangeUnavailable, responseBuffer.length);
-            return ReadResult(ReadError.none, offset);
+                return ReadResult.failure(ReadFailure(ReadError.rangeUnavailable, responseBuffer.length));
+            return ReadResult.success(ReadValue(offset));
         }
         catch (Exception)
-            return ReadResult(ReadError.sourceFailure, 0);
+            return ReadResult.failure(ReadFailure(ReadError.sourceFailure, 0));
     }
 
     ReadResult readSome(ulong offset, scope ubyte[] destination,
         ReadLimits limits = ReadLimits.init) @safe
     {
         if (!destination.length)
-            return ReadResult(ReadError.endOfSource, 0);
+            return ReadResult.failure(ReadFailure(ReadError.endOfSource, 0));
         auto result = read(ByteRange(offset, destination.length), destination, limits);
-        if (result.error == ReadError.rangeUnavailable && result.bytesRead > 0)
-            return ReadResult(ReadError.none, result.bytesRead);
-        if (result.error == ReadError.rangeUnavailable && result.bytesRead == 0)
-            return ReadResult(ReadError.endOfSource, 0);
+        if (result.hasError && result.error.kind == ReadError.rangeUnavailable && result.error.bytesRead > 0)
+            return ReadResult.success(ReadValue(result.error.bytesRead));
+        if (result.hasError && result.error.kind == ReadError.sourceFailure && response.statusCode == 416)
+        {
+            if (response.totalLength != ulong.max && offset == response.totalLength)
+                return ReadResult.failure(ReadFailure(ReadError.endOfSource, 0));
+            if (response.totalLength != ulong.max && offset > response.totalLength)
+                return ReadResult.failure(ReadFailure(ReadError.invalidRange, 0));
+        }
+        if (result.hasError && result.error.kind == ReadError.rangeUnavailable && result.error.bytesRead == 0)
+            return ReadResult.failure(ReadFailure(ReadError.sourceFailure, 0));
         return result;
     }
+}
+
+private ulong parseTotalLength(string value) @safe pure nothrow
+{
+    auto fields = value.strip.split("/");
+    if (fields.length != 2 || fields[1] == "*") return ulong.max;
+    try return fields[1].to!ulong;
+    catch (Exception) return ulong.max;
+}
+
+private bool validContentRange(string value, ulong offset, size_t bodyLength,
+    ulong totalLength) @safe pure nothrow
+{
+    auto fields = value.strip.split("/");
+    if (fields.length != 2 || fields[0].strip.split(" ").length != 2)
+        return false;
+    auto range = fields[0].strip.split(" ")[1].split("-");
+    if (range.length != 2) return false;
+    try
+    {
+        auto start = range[0].to!ulong;
+        auto end = range[1].to!ulong;
+        return start == offset && end >= start && end - start + 1 == bodyLength
+            && (totalLength == ulong.max || end < totalLength);
+    }
+    catch (Exception) return false;
 }
 
 /// Buffered synchronous HTTP upload destination.
@@ -151,9 +194,9 @@ class HttpSink : ByteSink
         WriteLimits limits = WriteLimits.init) @safe
     {
         if (closed)
-            return WriteResult(WriteError.destinationFailure, 0);
+            return WriteResult.failure(WriteFailure(WriteError.destinationFailure, 0));
         if (source.length > limits.maximumBytes)
-            return WriteResult(WriteError.limitExceeded, 0);
+            return WriteResult.failure(WriteFailure(WriteError.limitExceeded, 0));
         return payload.write(source);
     }
 
@@ -200,12 +243,12 @@ class HttpSink : ByteSink
             client.onReceive = (ubyte[] data) { return data.length; };
             client.perform();
             if (status.code / 100 != 2)
-                transfer = TransferResult(TransferError.destinationFailure, 0);
+                transfer = TransferResult.failure(TransferFailure(TransferError.destinationFailure, 0));
             else
-                transfer = TransferResult(TransferError.none, payload.length);
+                transfer = TransferResult.success(TransferValue(payload.length));
         }
         catch (Exception)
-            transfer = TransferResult(TransferError.destinationFailure, 0);
+            transfer = TransferResult.failure(TransferFailure(TransferError.destinationFailure, 0));
     }
 
     @property bool isClosed() const @safe pure nothrow { return closed; }
@@ -217,7 +260,7 @@ TransferResult uploadTo(ByteSource source, string url,
 {
     auto sink = new HttpSink(url, limits.chunkSize, limits.maximumBytes);
     auto copied = copyTo(source, sink, limits);
-    if (!copied.ok)
+    if (!copied.hasValue)
         return copied;
     sink.close();
     return sink.result;
